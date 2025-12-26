@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Simulasi Hukum Newton III – Biliar</title>
+
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/cannon.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+html,body{margin:0;overflow:hidden}
+#renderCanvas{width:100vw;height:100vh;display:block}
+#scoreBox{
+ position:absolute;left:10px;top:10px;
+ background:rgba(0,0,0,.7);color:#fff;
+ padding:10px;font-family:Arial;border-radius:6px}
+#webcamBox{
+ position:absolute;right:10px;bottom:10px;
+ border:2px solid gold;padding:5px;
+ background:#000;color:white}
+video{width:200px}
+</style>
+</head>
+
+<body>
+<canvas id="renderCanvas"></canvas>
+
+<div id="scoreBox">
+<b>SKOR TUMBUKAN</b><br>
+Akurasi : <span id="s1">0</span><br>
+Aksi–Reaksi : <span id="s2">0</span><br>
+Momentum : <span id="s3">0</span><br>
+Bonus : <span id="s4">0</span><hr>
+TOTAL : <span id="total">0</span>
+</div>
+
+<div id="webcamBox">
+<b>WEBCAM</b><br>
+<video id="video" autoplay></video><br>
+Arahkan Telapak Tangan untuk Memukul Bola
+</div>
+
+<script>
+const canvas = document.getElementById("renderCanvas");
+const engine = new BABYLON.Engine(canvas,true);
+let forceArrow;
+
+const scene = new BABYLON.Scene(engine);
+scene.enablePhysics(new BABYLON.Vector3(0,0,0),
+ new BABYLON.CannonJSPlugin());
+
+const cam = new BABYLON.ArcRotateCamera("cam",
+ Math.PI/2,Math.PI/3,10,BABYLON.Vector3.Zero(),scene);
+cam.attachControl(canvas,true);
+
+new BABYLON.HemisphericLight("l",
+ new BABYLON.Vector3(0,1,0),scene);
+
+const table = BABYLON.MeshBuilder.CreateBox("t",
+{width:8,depth:4,height:0.3},scene);
+table.position.y=-0.15;
+table.physicsImpostor=new BABYLON.PhysicsImpostor(
+ table,BABYLON.PhysicsImpostor.BoxImpostor,
+ {mass:0,restitution:.9},scene);
+
+function ball(name,x,z,color){
+ let b=BABYLON.MeshBuilder.CreateSphere(name,{diameter:.4},scene);
+ b.position=new BABYLON.Vector3(x,.2,z);
+ let m=new BABYLON.StandardMaterial("m",scene);
+ m.diffuseColor=color;b.material=m;
+ b.physicsImpostor=new BABYLON.PhysicsImpostor(
+ b,BABYLON.PhysicsImpostor.SphereImpostor,
+ {mass:1,restitution:.95},scene);
+ return b;
+}
+const cue=ball("cue",-2,0,BABYLON.Color3.White());
+const target=ball("tar",0,0,BABYLON.Color3.Red());
+
+forceArrow=BABYLON.MeshBuilder.CreateLines("a",
+{points:[BABYLON.Vector3.Zero(),BABYLON.Vector3.Zero()]},scene);
+
+let s1=0,s2=0,s3=0,s4=0;
+function update(){
+ document.getElementById("s1").innerText=s1;
+ document.getElementById("s2").innerText=s2;
+ document.getElementById("s3").innerText=s3;
+ document.getElementById("s4").innerText=s4;
+ document.getElementById("total").innerText=s1+s2+s3+s4;
+}
+
+cue.physicsImpostor.registerOnPhysicsCollide(
+ target.physicsImpostor,()=>{
+  forceArrow.color=BABYLON.Color3.Red();
+  s2=30;s3=10;update();
+ });
+
+/* ================== HAND TRACKING ================== */
+const video=document.getElementById("video");
+const hands=new Hands({locateFile:f=>
+`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+hands.setOptions({maxNumHands:1});
+hands.onResults(res=>{
+ if(res.multiHandLandmarks){
+   const p=res.multiHandLandmarks[0][8];
+   let speed=(0.5-p.z)*20;
+   if(speed>0.2){
+     const f=new BABYLON.Vector3(speed,0,0);
+     cue.physicsImpostor.applyImpulse(f,cue.position);
+     forceArrow=BABYLON.MeshBuilder.CreateLines(null,{
+      points:[cue.position,cue.position.add(f.normalize())],
+      instance:forceArrow});
+     s1=Math.min(50,Math.abs(speed*10));
+     s4=5;update();
+   }
+ }
+});
+
+const camWeb=new Camera(video,{onFrame:async()=>{
+ await hands.send({image:video});
+}});
+camWeb.start();
+
+engine.runRenderLoop(()=>scene.render());
+window.addEventListener("resize",()=>engine.resize());
+</script>
+</body>
+</html>
