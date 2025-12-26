@@ -1,0 +1,530 @@
+DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>Simulasi Biliar - Newton III (Babylon.js + Cannon.js)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <style>
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; font-family: Arial, Helvetica, sans-serif; }
+    #renderCanvas { width:100%; height:100%; touch-action: none; display:block; }
+    #ui {
+      position: absolute; right: 12px; top: 12px; width: 260px;
+      background: rgba(255,255,255,0.95); padding:12px; border-radius:8px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15); font-size:14px;
+    }
+    #scoreBox { font-weight:700; margin-bottom:8px; }
+    .scoreRow { display:flex; justify-content:space-between; margin:4px 0; }
+    button { width:100%; padding:8px; margin-top:8px; cursor:pointer; }
+    #log { max-height:120px; overflow:auto; font-size:12px; margin-top:8px; background:#f7f7f7; padding:6px; border-radius:4px; }
+    label { font-size:13px; }
+  </style>
+<meta charset="UTF-8" />
+<title>Simulasi Hukum Newton III - Biliar 3D</title>
+<style>
+  html, body { width:100%; height:100%; margin:0; overflow:hidden; font-family:Arial;}
+  #renderCanvas { width:100%; height:100%; touch-action:none; }
+  #panel {
+    position:absolute; right:10px; top:10px; width:260px;
+    background:#1f2937; color:#fff; padding:12px; border-radius:10px;
+  }
+  #panel h3 { margin:0 0 8px 0; color:#facc15; }
+  .row { font-size:14px; margin:4px 0; }
+  .total { font-size:20px; color:#22c55e; margin-top:8px; }
+  #hint { position:absolute; left:10px; bottom:10px; background:#0008; color:#fff; padding:8px; border-radius:8px;}
+</style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+
+  <div id="ui">
+    <div id="scoreBox">=== SKOR TUMBUKAN ===</div>
+    <div class="scoreRow"><span>Akurasi Tumbukan</span><span id="scoreAccuracy">0</span></div>
+    <div class="scoreRow"><span>Aksi–Reaksi</span><span id="scoreAksiReaksi">0</span></div>
+    <div class="scoreRow"><span>Momentum</span><span id="scoreMomentum">0</span></div>
+    <div class="scoreRow"><span>Bonus Eksplorasi</span><span id="scoreBonus">0</span></div>
+    <hr/>
+    <div class="scoreRow"><strong>TOTAL SKOR</strong><strong id="scoreTotal">0</strong></div>
+    <div class="scoreRow"><span>Kategori</span><span id="scoreCategory">-</span></div>
+
+    <label for="forceScale">Skala Gaya (k): <span id="forceScaleVal">8</span></label>
+    <input id="forceScale" type="range" min="2" max="18" value="8" style="width:100%" />
+    <button id="resetBtn">Reset Posisi</button>
+    <button id="clearScoreBtn">Reset Skor</button>
+
+    <div id="log"></div>
+  </div>
+
+  <!-- Babylon.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/babylonjs@5.0.0/babylon.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@5.0.0/babylonjs.loaders.min.js"></script>
+
+  <!-- Cannon.js classic build (for Babylon physics plugin) -->
+  <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+  <script>
+  /*********************************************************************
+   * Simulasi Biliar (Babylon.js + Cannon.js)
+   * - 2 bola (cue & target)
+   * - tarik (drag) pada bola cue untuk memberi impulse
+   * - visual vektor gaya aksi & reaksi
+   * - scoring: akurasi, aksi-reaksi, momentum, bonus
+   *********************************************************************/
+
+  (function(){
+    const canvas = document.getElementById('renderCanvas');
+    const engine = new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true});
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.92, 0.95, 1.0, 1.0);
+
+    // Camera & light
+    const camera = new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/3.5, 14, new BABYLON.Vector3(0,0,0), scene);
+    camera.attachControl(canvas, true);
+    camera.lowerRadiusLimit = 8;
+    camera.upperRadiusLimit = 30;
+
+    const light = new BABYLON.HemisphericLight("hLight", new BABYLON.Vector3(0.3,1,0.6), scene);
+    light.intensity = 0.95;
+
+    // Physics
+    const gravityVector = new BABYLON.Vector3(0,-9.81,0);
+    const physicsPlugin = new BABYLON.CannonJSPlugin(true, 10, CANNON);
+    scene.enablePhysics(gravityVector, physicsPlugin);
+
+    // Table (plane)
+    const tableMat = new BABYLON.StandardMaterial("tableMat", scene);
+    tableMat.diffuseColor = new BABYLON.Color3(0.02, 0.6, 0.12);
+    tableMat.specularColor = new BABYLON.Color3(0.1,0.1,0.1);
+
+    const table = BABYLON.MeshBuilder.CreateBox("table", {height:0.4, width:12, depth:6}, scene);
+    table.position.y = -0.2;
+    table.material = tableMat;
+    table.physicsImpostor = new BABYLON.PhysicsImpostor(table, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, restitution: 0.95, friction: 0.5 }, scene);
+
+    // Walls/rails (simple)
+    const railMat = new BABYLON.StandardMaterial("railMat", scene);
+    railMat.diffuseColor = new BABYLON.Color3(0.4,0.2,0.05);
+
+    function makeRail(name, w,h,d,x,y,z,rotY){
+      const rail = BABYLON.MeshBuilder.CreateBox(name, {width:w, height:h, depth:d}, scene);
+      rail.material = railMat;
+      rail.position.set(x,y,z);
+      if(rotY) rail.rotation.y = rotY;
+      rail.physicsImpostor = new BABYLON.PhysicsImpostor(rail, BABYLON.PhysicsImpostor.BoxImpostor, { mass:0, restitution:0.9, friction:0.6 }, scene);
+      return rail;
+    }
+    // 4 rails
+    makeRail("rail1", 0.3,0.6,6.2, -6.15,0.1,0);
+    makeRail("rail2", 0.3,0.6,6.2,  6.15,0.1,0);
+    makeRail("rail3", 12.3,0.6,0.3, 0,0.1,3.1415/2);
+    makeRail("rail4", 12.3,0.6,0.3, 0,0.1,-3.1415/2);
+
+    // Balls
+    const ballRadius = 0.35;
+    const ballMatCue = new BABYLON.StandardMaterial("cueMat", scene); ballMatCue.diffuseColor = new BABYLON.Color3(1,1,1);
+    const ballMatTarget = new BABYLON.StandardMaterial("tgtMat", scene); ballMatTarget.diffuseColor = new BABYLON.Color3(1,0.1,0.1);
+
+    const cue = BABYLON.MeshBuilder.CreateSphere("cue", {diameter: ballRadius*2}, scene);
+    cue.position = new BABYLON.Vector3(-2.2, ballRadius, 0);
+    cue.material = ballMatCue;
+    cue.physicsImpostor = new BABYLON.PhysicsImpostor(cue, BABYLON.PhysicsImpostor.SphereImpostor, { mass: 0.17, restitution: 0.98, friction: 0.2 }, scene);
+
+    const target = BABYLON.MeshBuilder.CreateSphere("target", {diameter: ballRadius*2}, scene);
+    target.position = new BABYLON.Vector3(0.7, ballRadius, 0.2);
+    target.material = ballMatTarget;
+    target.physicsImpostor = new BABYLON.PhysicsImpostor(target, BABYLON.PhysicsImpostor.SphereImpostor, { mass: 0.17, restitution: 0.98, friction: 0.2 }, scene);
+
+    // Ground small shadow plane
+    const ground = BABYLON.MeshBuilder.CreateGround("g", {width:12, height:6}, scene);
+    ground.isVisible = false;
+
+    // Arrow helpers (lines)
+    const makeArrow = (name, color) => {
+      const lines = BABYLON.MeshBuilder.CreateLines(name, {points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0,0,1)]}, scene);
+      lines.isVisible = false;
+      lines.alwaysSelectAsActiveMesh = true;
+      return lines;
+    };
+    const arrowAction = makeArrow("arrowA");
+    const arrowReaction = makeArrow("arrowR");
+
+    // UI and scoring variables
+    const ui = {
+      accuracy: 0, aksiReaksi: 0, momentum: 0, bonus: 0, total: 0, category: '-',
+      attempts: 0, explorationCount: 0
+    };
+
+    // Helpers to update UI
+    function updateScoreUI(){
+      document.getElementById('scoreAccuracy').textContent = Math.round(ui.accuracy);
+      document.getElementById('scoreAksiReaksi').textContent = Math.round(ui.aksiReaksi);
+      document.getElementById('scoreMomentum').textContent = Math.round(ui.momentum);
+      document.getElementById('scoreBonus').textContent = Math.round(ui.bonus);
+      ui.total = Math.round(ui.accuracy + ui.aksiReaksi + ui.momentum + ui.bonus);
+      document.getElementById('scoreTotal').textContent = ui.total;
+      let cat = '-';
+      if(ui.total >= 90) cat = 'Sangat Baik';
+      else if(ui.total >= 75) cat = 'Baik';
+      else if(ui.total >= 60) cat = 'Cukup';
+      else if(ui.total >= 40) cat = 'Kurang';
+      else cat = 'Sangat Kurang';
+      ui.category = cat;
+      document.getElementById('scoreCategory').textContent = ui.category;
+    }
+
+    function log(msg){
+      const logEl = document.getElementById('log');
+      const p = document.createElement('div'); p.textContent = msg;
+      logEl.prepend(p);
+    }
+
+    // Drag controls: user drags cue ball to set impulse vector
+    let dragging = false;
+    let dragStart = null;
+    let pointerDownWorld = null;
+    let inputVector = new BABYLON.Vector3(0,0,0);
+    const pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
+      if(pointerInfo.type === BABYLON.PointerEventTypes.POINTERDOWN){
+        const pick = scene.pick(scene.pointerX, scene.pointerY);
+        if(pick.hit && pick.pickedMesh === cue){
+          dragging = true;
+          dragStart = pick.pickedPoint.clone();
+          pointerDownWorld = pick.pickedPoint.clone();
+          // temporarily make cue kinematic (mass=0) to drag position directly
+          cue.physicsImpostor.sleep();
+          cue.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
+          cue.physicsImpostor.setAngularVelocity(BABYLON.Vector3.Zero());
+        }
+      } else if(pointerInfo.type === BABYLON.PointerEventTypes.POINTERUP){
+        if(dragging){
+          dragging = false;
+          // compute drag vector from dragStart to pointerUp world position and apply impulse
+          const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh)=>true);
+          let upPoint = pick && pick.pickedPoint ? pick.pickedPoint : dragStart.clone();
+          // compute 2D vector on table (ignore Y)
+          const dragVec = dragStart.subtract(upPoint);
+          dragVec.y = 0;
+          // small threshold
+          if(dragVec.length() < 0.02){
+            // not enough drag -> no strike
+            cue.physicsImpostor.wakeUp();
+            log('Tarikan terlalu kecil, tidak memberikan gaya.');
+            ui.explorationCount++; // still counts as try
+            updateBonus();
+            return;
+          }
+          // scale factor k from slider
+          const k = Number(document.getElementById('forceScale').value) || 8;
+          const impulse = dragVec.scale(k); // impulse vector
+          // apply impulse at cue center (local)
+          const worldPoint = cue.getAbsolutePosition();
+          cue.physicsImpostor.applyImpulse( new BABYLON.Vector3(impulse.x, 0, impulse.z), worldPoint);
+          log('Impulse applied: ' + impulse.scale(1).toFixed(2));
+          ui.attempts++;
+          ui.explorationCount++;
+          updateBonus();
+          cue.physicsImpostor.wakeUp();
+        }
+      } else if(pointerInfo.type === BABYLON.PointerEventTypes.POINTERMOVE){
+        if(dragging){
+          const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh)=>true);
+          if(pick.hit){
+            // move cue visually with cursor along table surface (y fixed)
+            const newPos = pick.pickedPoint.clone();
+            newPos.y = ballRadius;
+            cue.position.copyFrom(newPos);
+            cue.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
+            // draw arrow from new position in direction opposite of drag start
+            const dragVec = dragStart.subtract(newPos);
+            dragVec.y = 0;
+            if(dragVec.length() > 0.001){
+              const dir = dragVec.normalize();
+              drawAimArrow(newPos, dir.scale(Math.min(dragVec.length()*2.4, 4)));
+            } else {
+              hideAimArrow();
+            }
+          }
+        }
+      }
+    });
+
+    // Aim arrow during drag (visual only)
+    let aimLine = null;
+    function drawAimArrow(from, vec){
+      if(aimLine) aimLine.dispose();
+      const to = from.add(vec);
+      aimLine = BABYLON.MeshBuilder.CreateLines("aim", {points: [from, to]}, scene);
+      aimLine.color = new BABYLON.Color3(1,1,0);
+      setTimeout(()=>{ if(aimLine) { aimLine.dispose(); aimLine = null; } }, 1000);
+    }
+    function hideAimArrow(){
+      if(aimLine){ aimLine.dispose(); aimLine = null; }
+    }
+
+    // Helpers: format vector nicely
+    BABYLON.Vector3.prototype.toFixed = function(d){
+      return `(${this.x.toFixed(d)}, ${this.y.toFixed(d)}, ${this.z.toFixed(d)})`;
+    };
+
+    // Listen for collision (Babylon physics impostor API)
+    cue.physicsImpostor.registerOnPhysicsCollide(target.physicsImpostor, function(main, collided){
+      // main == cue.physicsImpostor, collided == target.physicsImpostor
+      // read velocities (approx at collision)
+      const vCue = main.getLinearVelocity() || BABYLON.Vector3.Zero();
+      const vTgt = collided.getLinearVelocity() || BABYLON.Vector3.Zero();
+      // positions
+      const posCue = cue.position.clone();
+      const posTgt = target.position.clone();
+      // direction from cue to target center
+      const centerDir = posTgt.subtract(posCue).normalize();
+      // direction of cue's velocity (if almost zero, fallback to previous applied impulse vector)
+      const cueVelDir = vCue.length() > 0.01 ? vCue.normalize() : centerDir.clone();
+      // angle between vel and centerDir (in degrees)
+      const dot = BABYLON.Vector3.Dot(cueVelDir, centerDir);
+      const clamped = Math.max(-1, Math.min(1, dot));
+      const angleRad = Math.acos(clamped);
+      const angleDeg = angleRad * (180/Math.PI);
+
+      // 1) Akurasi tumbukan: smaller angle => higher score (0-50)
+      let scoreAkurasi = 0;
+      if(angleDeg <= 5) scoreAkurasi = 50;
+      else if(angleDeg <= 15) scoreAkurasi = 40 + Math.round((15-angleDeg)/10 * 5); // 35-45 range
+      else if(angleDeg <= 30) scoreAkurasi = Math.round(30 - ((angleDeg-15)/15)*15); // 15-30
+      else if(angleDeg <= 40) scoreAkurasi = 8;
+      else scoreAkurasi = 0;
+
+      // 2) Kesesuaian aksi-reaksi: compare magnitude of momentum change
+      // approximate change in momentum for each ball: m*(v_after - v_before)
+      // Here we only have instant velocities; we approximate change by comparing vCue and vTgt magnitudes
+      const m = 0.17; // mass used for impostor
+      // We'll estimate impulse experienced by target as m * |vTgt|
+      const impTgt = m * vTgt.length();
+      const impCue = m * vCue.length(); // approximate
+      // Ideally, impTgt and impCue magnitudes should be similar. Compute relative difference percent:
+      const avg = (impTgt + impCue) / 2 || 0.0001;
+      const relDiff = Math.abs(impTgt - impCue) / avg * 100; // percent
+      let scoreAksi = 0;
+      if(relDiff <= 5) scoreAksi = 30;
+      else if(relDiff <= 15) scoreAksi = 20 + Math.round((15 - relDiff)/10 * 10); // 20-30
+      else if(relDiff <= 25) scoreAksi = 10 + Math.round((25 - relDiff)/15 * 5); // 10-15
+      else scoreAksi = 3; // almost mismatch
+
+      // 3) Momentum: check conservation: |p_before_total - p_after_total|
+      // We don't have before/after reliably; approximate by comparing initial cue momentum magnitude (impulse) and resulting target momentum
+      // Use last applied impulse magnitude tracked (see below). If not available, approximate via velocities.
+      const pCue = m * vCue.length();
+      const pTgt = m * vTgt.length();
+      // If total momentum close, give full points
+      const pTotalDiff = Math.abs(pCue - pTgt);
+      const pAvg = (pCue + pTgt)/2 || 0.0001;
+      const pRel = (pAvg===0) ? 100 : (pTotalDiff / pAvg * 100);
+      let scoreMomentum = 0;
+      if(pRel <= 10) scoreMomentum = 10;
+      else if(pRel <= 25) scoreMomentum = 6;
+      else if(pRel <= 50) scoreMomentum = 3;
+      else scoreMomentum = 0;
+
+      // 4) Bonus already handled elsewhere (exploration)
+      // Accumulate to UI but also we can give incremental bonus per good action
+      if(scoreAkurasi >= 45 && scoreAksi >= 25) {
+        ui.bonus = Math.min(10, ui.bonus + 2); // small bonus for excellent collision
+        log('Bonus diberikan: +2 (tumbukan sangat baik).');
+      }
+
+      ui.accuracy = Math.max(ui.accuracy, scoreAkurasi); // keep highest per session OR you can aggregate differently
+      ui.aksiReaksi = Math.max(ui.aksiReaksi, scoreAksi);
+      ui.momentum = Math.max(ui.momentum, scoreMomentum);
+
+      // Visual: show action arrow (from cue at contact) and reaction arrow (on target)
+      // Action arrow direction: cueVelDir (pointing from cue toward travel)
+      showActionReactionArrows(posCue, cueVelDir, posTgt, centerDir);
+
+      // Update UI and logs
+      updateScoreUI();
+      log(`Collision detected — angle = ${angleDeg.toFixed(1)}°, acc=${scoreAkurasi}, aksi=${scoreAksi}, mom=${scoreMomentum}`);
+    });
+
+    // Show arrows for action and reaction briefly
+    function showActionReactionArrows(cuePos, actionDir, tgtPos, reactionDir){
+      // Action (from cue center, pointing in direction of action)
+      if(arrowAction) arrowAction.dispose();
+      if(arrowReaction) arrowReaction.dispose();
+      // create new lines
+      const actTo = cuePos.add(actionDir.scale(1.5));
+      window.arrowAction = BABYLON.MeshBuilder.CreateLines("act", {points: [cuePos, actTo]}, scene);
+      window.arrowAction.color = new BABYLON.Color3(1,0.6,0);
+
+      // reaction from target center (opposite direction)
+      const reactDir = reactionDir.scale(-1);
+      const reactTo = tgtPos.add(reactDir.scale(1.5));
+      window.arrowReaction = BABYLON.MeshBuilder.CreateLines("react", {points: [tgtPos, reactTo]}, scene);
+      window.arrowReaction.color = new BABYLON.Color3(0,0.6,1);
+
+      // auto remove after 2.5s
+      setTimeout(()=>{
+        try{ if(window.arrowAction) window.arrowAction.dispose(); if(window.arrowReaction) window.arrowReaction.dispose(); }catch(e){}
+      }, 2500);
+    }
+
+    // Track exploration bonus: for every 5 tries give extra points +4, and for usage of vektor or manual = counted
+    function updateBonus(){
+      // base: every 5 attempts -> +4
+      const bonusFromAttempts = Math.floor(ui.explorationCount / 5) * 4;
+      let manualMode = 0; // placeholder if user manually toggled something
+      // also add if user enabled aim (we used aim line) -> +3 (not tracked separately here)
+      const totalBonus = Math.min(10, bonusFromAttempts + manualMode);
+      ui.bonus = Math.max(ui.bonus, totalBonus);
+      updateScoreUI();
+    }
+
+    // Reset positions button
+    document.getElementById('resetBtn').addEventListener('click', ()=>{
+      // reset positions and velocities
+      cue.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
+      cue.physicsImpostor.setAngularVelocity(BABYLON.Vector3.Zero());
+      target.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
+      target.physicsImpostor.setAngularVelocity(BABYLON.Vector3.Zero());
+      cue.position = new BABYLON.Vector3(-2.2, ballRadius, 0);
+      target.position = new BABYLON.Vector3(0.7, ballRadius, 0.2);
+      cue.physicsImpostor.wakeUp();
+      target.physicsImpostor.wakeUp();
+      log('Posisi bola di-reset.');
+    });
+
+    document.getElementById('clearScoreBtn').addEventListener('click', ()=>{
+      ui.accuracy = ui.aksiReaksi = ui.momentum = ui.bonus = ui.total = 0;
+      ui.attempts = 0; ui.explorationCount = 0;
+      updateScoreUI();
+      log('Skor di-reset.');
+    });
+
+    // Slider update
+    const forceScale = document.getElementById('forceScale');
+    const forceScaleVal = document.getElementById('forceScaleVal');
+    forceScale.addEventListener('input', ()=>{ forceScaleVal.textContent = forceScale.value; });
+
+    // Resize
+    window.addEventListener('resize', function(){ engine.resize(); });
+
+    // Run render loop
+    engine.runRenderLoop(function(){
+      scene.render();
+    });
+
+    // Initial UI
+    updateScoreUI();
+    log('Simulasi dimuat. Klik/drag bola putih untuk memberi gaya.');
+
+  })();
+  </script>
+<canvas id="renderCanvas"></canvas>
+
+<div id="panel">
+  <h3>Sistem Skor</h3>
+  <div class="row">Akurasi: <span id="akurasi">0</span></div>
+  <div class="row">Aksi–Reaksi: <span id="aksi">0</span></div>
+  <div class="row">Momentum: <span id="momentum">0</span></div>
+  <div class="row">Eksplorasi: <span id="eksplorasi">0</span></div>
+  <div class="total">TOTAL: <span id="total">0</span></div>
+</div>
+
+<div id="hint">
+  A/D = putar arah (tangan kiri) • Spasi = pukul bola (tangan kanan)
+</div>
+
+<!-- Babylon.js -->
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/cannon.js"></script>
+<script src="https://cdn.babylonjs.com/babylon.cannon.js"></script>
+
+<script>
+const canvas = document.getElementById("renderCanvas");
+const engine = new BABYLON.Engine(canvas, true);
+
+const scene = new BABYLON.Scene(engine);
+scene.enablePhysics(new BABYLON.Vector3(0, -9.8, 0), new BABYLON.CannonJSPlugin());
+
+// Kamera & cahaya
+const camera = new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/3, 10, BABYLON.Vector3.Zero(), scene);
+camera.attachControl(canvas, true);
+new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0,1,0), scene);
+
+// Meja biliar
+const table = BABYLON.MeshBuilder.CreateBox("table",{width:6, depth:3, height:0.3}, scene);
+table.position.y = -0.15;
+table.material = new BABYLON.StandardMaterial("tmat", scene);
+table.material.diffuseColor = new BABYLON.Color3(0.1,0.5,0.1);
+table.physicsImpostor = new BABYLON.PhysicsImpostor(table, BABYLON.PhysicsImpostor.BoxImpostor, {mass:0, restitution:0.9}, scene);
+
+// Fungsi bola
+function ball(name,x,z,color){
+  const b = BABYLON.MeshBuilder.CreateSphere(name,{diameter:0.25},scene);
+  b.position.set(x,0.13,z);
+  const m = new BABYLON.StandardMaterial(name+"m",scene);
+  m.diffuseColor = color; b.material = m;
+  b.physicsImpostor = new BABYLON.PhysicsImpostor(b, BABYLON.PhysicsImpostor.SphereImpostor, {mass:1, restitution:0.95}, scene);
+  return b;
+}
+
+const cue = ball("cue",0,0,BABYLON.Color3.White());
+const target = ball("target",1.5,0,BABYLON.Color3.Yellow());
+
+// Variabel kontrol & skor
+let angle = 0, power = 6;
+let akurasi=0, aksi=0, momentum=0, eksplorasi=0;
+
+// Input (dua tangan)
+window.addEventListener("keydown", e=>{
+  if(e.key==="a") angle -= 0.12;
+  if(e.key==="d") angle += 0.12;
+  if(e.key===" "){
+    const force = new BABYLON.Vector3(Math.cos(angle)*power,0,Math.sin(angle)*power);
+    cue.physicsImpostor.applyImpulse(force, cue.getAbsolutePosition());
+    akurasi += 10;
+  }
+});
+
+// Deteksi aksi–reaksi & momentum
+scene.onBeforePhysicsObservable.add(()=>{
+  if(cue.intersectsMesh(target,false)){
+    aksi += 5;
+    momentum += 2;
+  }
+});
+
+// Update skor
+scene.onAfterRenderObservable.add(()=>{
+  eksplorasi += 0.02;
+  const total = Math.floor(akurasi + aksi + momentum + eksplorasi);
+  akurasi = Math.min(akurasi,50);
+  aksi = Math.min(aksi,30);
+  momentum = Math.min(momentum,10);
+
+  document.getElementById("akurasi").innerText = akurasi;
+  document.getElementById("aksi").innerText = aksi;
+  document.getElementById("momentum").innerText = momentum;
+  document.getElementById("eksplorasi").innerText = Math.floor(eksplorasi);
+  document.getElementById("total").innerText = total;
+});
+
+// Render
+engine.runRenderLoop(()=>scene.render());
+window.addEventListener("resize", ()=>engine.resize());
+</script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulasi Hand Tracking Bola Cue</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="sketch.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+</body>
+</html>
