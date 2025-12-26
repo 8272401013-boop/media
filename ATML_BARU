@@ -1,0 +1,102 @@
+let hands, video;
+let cueBall, table;
+let prevIndexY = 0;
+
+function setup() {
+  createCanvas(800, 600);
+
+  // Bola cue
+  cueBall = new Ball(width / 2, height - 100, 20);
+
+  // Area meja (hanya visualisasi)
+  table = { x: 50, y: 50, w: width - 100, h: height - 200 };
+
+  // Inisialisasi video
+  video = createCapture(VIDEO);
+  video.size(width, height);
+  video.hide();
+
+  // Setup MediaPipe Hands
+  hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.5
+  });
+  hands.onResults(onResults);
+
+  // Kamera MediaPipe otomatis
+  const camera = new Camera(video.elt, {
+    onFrame: async () => {
+      await hands.send({image: video.elt});
+    },
+    width: width,
+    height: height
+  });
+  camera.start();
+}
+
+function draw() {
+  background(30);
+
+  // Meja
+  fill(50, 100, 50);
+  rect(table.x, table.y, table.w, table.h);
+
+  // Update dan tampilkan bola
+  cueBall.update();
+  cueBall.show();
+}
+
+function onResults(results) {
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    let landmarks = results.multiHandLandmarks[0];
+    let indexTip = landmarks[8]; // ujung jari telunjuk
+
+    let indexY = indexTip.y * height;
+    let indexX = indexTip.x * width;
+
+    // Hitung kecepatan dorong tangan ke depan
+    let speed = prevIndexY - indexY;
+    prevIndexY = indexY;
+
+    if (speed > 5) { // threshold pukulan
+      cueBall.applyForce(createVector(0, -speed * 0.5));
+    }
+
+    // Visualisasi tangan
+    fill(0, 255, 0);
+    noStroke();
+    ellipse(indexX, indexY, 20, 20);
+    ellipse(landmarks[0].x * width, landmarks[0].y * height, 30, 30);
+  }
+}
+
+// Kelas Bola
+class Ball {
+  constructor(x, y, r) {
+    this.pos = createVector(x, y);
+    this.vel = createVector(0, 0);
+    this.r = r;
+  }
+
+  applyForce(force) {
+    this.vel.add(force);
+  }
+
+  update() {
+    this.pos.add(this.vel);
+    this.vel.mult(0.95);
+
+    // Pantulan dinding meja
+    if (this.pos.x - this.r < table.x || this.pos.x + this.r > table.x + table.w) this.vel.x *= -1;
+    if (this.pos.y - this.r < table.y || this.pos.y + this.r > table.y + table.h) this.vel.y *= -1;
+  }
+
+  show() {
+    fill(255, 0, 0);
+    noStroke();
+    ellipse(this.pos.x, this.pos.y, this.r * 2);
+  }
+}
