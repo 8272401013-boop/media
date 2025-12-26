@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Simulasi Hukum Newton III - Biliar 3D</title>
+<style>
+  html, body { width:100%; height:100%; margin:0; overflow:hidden; font-family:Arial;}
+  #renderCanvas { width:100%; height:100%; touch-action:none; }
+  #panel {
+    position:absolute; right:10px; top:10px; width:260px;
+    background:#1f2937; color:#fff; padding:12px; border-radius:10px;
+  }
+  #panel h3 { margin:0 0 8px 0; color:#facc15; }
+  .row { font-size:14px; margin:4px 0; }
+  .total { font-size:20px; color:#22c55e; margin-top:8px; }
+  #hint { position:absolute; left:10px; bottom:10px; background:#0008; color:#fff; padding:8px; border-radius:8px;}
+</style>
+</head>
+<body>
+<canvas id="renderCanvas"></canvas>
+
+<div id="panel">
+  <h3>Sistem Skor</h3>
+  <div class="row">Akurasi: <span id="akurasi">0</span></div>
+  <div class="row">Aksi–Reaksi: <span id="aksi">0</span></div>
+  <div class="row">Momentum: <span id="momentum">0</span></div>
+  <div class="row">Eksplorasi: <span id="eksplorasi">0</span></div>
+  <div class="total">TOTAL: <span id="total">0</span></div>
+</div>
+
+<div id="hint">
+  A/D = putar arah (tangan kiri) • Spasi = pukul bola (tangan kanan)
+</div>
+
+<!-- Babylon.js -->
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/cannon.js"></script>
+<script src="https://cdn.babylonjs.com/babylon.cannon.js"></script>
+
+<script>
+const canvas = document.getElementById("renderCanvas");
+const engine = new BABYLON.Engine(canvas, true);
+
+const scene = new BABYLON.Scene(engine);
+scene.enablePhysics(new BABYLON.Vector3(0, -9.8, 0), new BABYLON.CannonJSPlugin());
+
+// Kamera & cahaya
+const camera = new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/3, 10, BABYLON.Vector3.Zero(), scene);
+camera.attachControl(canvas, true);
+new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0,1,0), scene);
+
+// Meja biliar
+const table = BABYLON.MeshBuilder.CreateBox("table",{width:6, depth:3, height:0.3}, scene);
+table.position.y = -0.15;
+table.material = new BABYLON.StandardMaterial("tmat", scene);
+table.material.diffuseColor = new BABYLON.Color3(0.1,0.5,0.1);
+table.physicsImpostor = new BABYLON.PhysicsImpostor(table, BABYLON.PhysicsImpostor.BoxImpostor, {mass:0, restitution:0.9}, scene);
+
+// Fungsi bola
+function ball(name,x,z,color){
+  const b = BABYLON.MeshBuilder.CreateSphere(name,{diameter:0.25},scene);
+  b.position.set(x,0.13,z);
+  const m = new BABYLON.StandardMaterial(name+"m",scene);
+  m.diffuseColor = color; b.material = m;
+  b.physicsImpostor = new BABYLON.PhysicsImpostor(b, BABYLON.PhysicsImpostor.SphereImpostor, {mass:1, restitution:0.95}, scene);
+  return b;
+}
+
+const cue = ball("cue",0,0,BABYLON.Color3.White());
+const target = ball("target",1.5,0,BABYLON.Color3.Yellow());
+
+// Variabel kontrol & skor
+let angle = 0, power = 6;
+let akurasi=0, aksi=0, momentum=0, eksplorasi=0;
+
+// Input (dua tangan)
+window.addEventListener("keydown", e=>{
+  if(e.key==="a") angle -= 0.12;
+  if(e.key==="d") angle += 0.12;
+  if(e.key===" "){
+    const force = new BABYLON.Vector3(Math.cos(angle)*power,0,Math.sin(angle)*power);
+    cue.physicsImpostor.applyImpulse(force, cue.getAbsolutePosition());
+    akurasi += 10;
+  }
+});
+
+// Deteksi aksi–reaksi & momentum
+scene.onBeforePhysicsObservable.add(()=>{
+  if(cue.intersectsMesh(target,false)){
+    aksi += 5;
+    momentum += 2;
+  }
+});
+
+// Update skor
+scene.onAfterRenderObservable.add(()=>{
+  eksplorasi += 0.02;
+  const total = Math.floor(akurasi + aksi + momentum + eksplorasi);
+  akurasi = Math.min(akurasi,50);
+  aksi = Math.min(aksi,30);
+  momentum = Math.min(momentum,10);
+
+  document.getElementById("akurasi").innerText = akurasi;
+  document.getElementById("aksi").innerText = aksi;
+  document.getElementById("momentum").innerText = momentum;
+  document.getElementById("eksplorasi").innerText = Math.floor(eksplorasi);
+  document.getElementById("total").innerText = total;
+});
+
+// Render
+engine.runRenderLoop(()=>scene.render());
+window.addEventListener("resize", ()=>engine.resize());
+</script>
+</body>
+</html>
